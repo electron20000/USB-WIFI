@@ -1,11 +1,11 @@
-name: Recreate Gradle Wrapper JAR
+name: gradle-wrapper.yml
 
 on:
   workflow_dispatch:
   push:
     paths:
       - "gradle/wrapper/gradle-wrapper.properties"
-      - ".github/workflows/recreate-gradle-wrapper.yml"
+      - ".github/workflows/gradle-wrapper.yml"
 
 jobs:
   rebuild-wrapper-jar:
