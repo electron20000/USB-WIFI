@@ -1,0 +1,97 @@
+name: Recreate Gradle Wrapper JAR
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "gradle/wrapper/gradle-wrapper.properties"
+      - ".github/workflows/recreate-gradle-wrapper.yml"
+
+jobs:
+  rebuild-wrapper-jar:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read wrapper distribution
+        id: wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Read distributionUrl=... and convert Gradle-escaped "\:" to ":"
+          DIST_URL="$(
+            grep -E '^distributionUrl=' gradle/wrapper/gradle-wrapper.properties               | cut -d'=' -f2-               | tr -d '\r'               | sed 's/\\:/:/g'
+          )"
+
+          if [[ -z "${DIST_URL}" ]]; then
+            echo "distributionUrl is empty or missing in gradle-wrapper.properties" >&2
+            exit 1
+          fi
+
+          # Extract version from .../gradle-X.Y[-...]-bin.zip
+          VERSION="$(echo "${DIST_URL}" | sed -n 's/.*gradle-\(.*\)-bin\.zip/\1/p')"
+          if [[ -z "${VERSION}" ]]; then
+            echo "Could not parse Gradle version from distributionUrl: ${DIST_URL}" >&2
+            exit 1
+          fi
+
+          echo "dist_url=${DIST_URL}" >> "${GITHUB_OUTPUT}"
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+
+          echo "Using dist_url: ${DIST_URL}"
+          echo "Parsed version: ${VERSION}"
+
+      - name: Download Gradle distribution
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fLsS "${{ steps.wrapper.outputs.dist_url }}" -o /tmp/gradle-distribution.zip
+          unzip -q /tmp/gradle-distribution.zip -d /tmp/gradle-dist
+
+      - name: Recreate gradle-wrapper.jar
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p gradle/wrapper
+
+          # 1) Prefer the real wrapper jar if present
+          REAL_WRAPPER_JAR="$(find /tmp/gradle-dist -type f -name "gradle-wrapper.jar" | head -n 1 || true)"
+          if [[ -n "${REAL_WRAPPER_JAR}" ]]; then
+            echo "Found gradle-wrapper.jar: ${REAL_WRAPPER_JAR}"
+            cp -f "${REAL_WRAPPER_JAR}" gradle/wrapper/gradle-wrapper.jar
+            exit 0
+          fi
+
+          # 2) Fallback: Gradle 8+ may split wrapper into plugin + shared
+          WRAPPER_PLUGIN="$(find /tmp/gradle-dist -type f -name "gradle-wrapper-*.jar" | head -n 1 || true)"
+          WRAPPER_SHARED="$(find /tmp/gradle-dist -type f -name "gradle-wrapper-shared-*.jar" | head -n 1 || true)"
+
+          if [[ -z "${WRAPPER_PLUGIN}" || -z "${WRAPPER_SHARED}" ]]; then
+            echo "Wrapper jars not found (need gradle-wrapper.jar OR gradle-wrapper-*.jar + gradle-wrapper-shared-*.jar)" >&2
+            echo "Debug: listing wrapper-related jars:" >&2
+            find /tmp/gradle-dist -type f -iname "*wrapper*.jar" >&2 || true
+            exit 1
+          fi
+
+          echo "Building fat gradle-wrapper.jar from:"
+          echo " - ${WRAPPER_SHARED}"
+          echo " - ${WRAPPER_PLUGIN}"
+
+          WORKDIR="$(mktemp -d)"
+          (cd "${WORKDIR}" && jar xf "${WRAPPER_SHARED}")
+          (cd "${WORKDIR}" && jar xf "${WRAPPER_PLUGIN}")
+          (cd "${WORKDIR}" && jar cf "${GITHUB_WORKSPACE}/gradle/wrapper/gradle-wrapper.jar" .)
+
+          echo "Created gradle/wrapper/gradle-wrapper.jar"
+
+      - name: Show checksum
+        run: sha256sum gradle/wrapper/gradle-wrapper.jar
+
+      - name: Upload recreated wrapper
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-wrapper-jar-${{ steps.wrapper.outputs.version }}
+          path: gradle/wrapper/gradle-wrapper.jar
