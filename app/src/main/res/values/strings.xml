@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">USB Wi-Fi Monitor</string>
+    <string name="start_capture">Start capture</string>
+    <string name="stop_capture">Stop capture</string>
+    <string name="usb_status_unknown">USB status unknown</string>
+    <string name="usb_ready">USB device ready</string>
+    <string name="usb_not_ready">Connect TL-WN721N via OTG</string>
+    <string name="channel_label">Channel</string>
+</resources>
