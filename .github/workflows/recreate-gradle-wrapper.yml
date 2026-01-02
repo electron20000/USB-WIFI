@@ -1,0 +1,47 @@
+name: Recreate Gradle Wrapper JAR
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'gradle/wrapper/gradle-wrapper.properties'
+      - '.github/workflows/recreate-gradle-wrapper.yml'
+
+jobs:
+  rebuild-wrapper-jar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read wrapper distribution
+        id: wrapper
+        run: |
+          DIST_URL=$(grep distributionUrl gradle/wrapper/gradle-wrapper.properties | cut -d'=' -f2-)
+          echo "dist_url=$DIST_URL" >> "$GITHUB_OUTPUT"
+          VERSION=$(echo "$DIST_URL" | sed -n 's/.*gradle-\(.*\)-bin.zip/\1/p')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Download Gradle distribution
+        run: |
+          curl -sSL "${{ steps.wrapper.outputs.dist_url }}" -o /tmp/gradle-distribution.zip
+          unzip -q /tmp/gradle-distribution.zip -d /tmp/gradle-dist
+
+      - name: Recreate gradle-wrapper.jar
+        run: |
+          WRAPPER_JAR=$(find /tmp/gradle-dist -name "gradle-wrapper-*.jar" | head -n 1)
+          if [ -z "$WRAPPER_JAR" ]; then
+            echo "Wrapper JAR not found in downloaded distribution" >&2
+            exit 1
+          fi
+          mkdir -p gradle/wrapper
+          cp "$WRAPPER_JAR" gradle/wrapper/gradle-wrapper.jar
+
+      - name: Show checksum
+        run: sha256sum gradle/wrapper/gradle-wrapper.jar
+
+      - name: Upload recreated wrapper
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-wrapper-jar-${{ steps.wrapper.outputs.version }}
+          path: gradle/wrapper/gradle-wrapper.jar
