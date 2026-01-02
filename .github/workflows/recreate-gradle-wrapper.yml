@@ -4,38 +4,71 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'gradle/wrapper/gradle-wrapper.properties'
-      - '.github/workflows/recreate-gradle-wrapper.yml'
+      - "gradle/wrapper/gradle-wrapper.properties"
+      - ".github/workflows/recreate-gradle-wrapper.yml"
 
 jobs:
   rebuild-wrapper-jar:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Read wrapper distribution
         id: wrapper
+        shell: bash
         run: |
-          DIST_URL=$(grep distributionUrl gradle/wrapper/gradle-wrapper.properties | cut -d'=' -f2-)
-          echo "dist_url=$DIST_URL" >> "$GITHUB_OUTPUT"
-          VERSION=$(echo "$DIST_URL" | sed -n 's/.*gradle-\(.*\)-bin.zip/\1/p')
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+
+          # Read distributionUrl=... and convert Gradle-escaped "\:" to ":"
+          DIST_URL="$(
+            grep -E '^distributionUrl=' gradle/wrapper/gradle-wrapper.properties \
+              | cut -d'=' -f2- \
+              | tr -d '\r' \
+              | sed 's/\\:/:/g'
+          )"
+
+          if [[ -z "${DIST_URL}" ]]; then
+            echo "distributionUrl is empty or missing in gradle-wrapper.properties" >&2
+            exit 1
+          fi
+
+          # Extract version from .../gradle-X.Y[-...]-bin.zip
+          VERSION="$(echo "${DIST_URL}" | sed -n 's/.*gradle-\(.*\)-bin\.zip/\1/p')"
+          if [[ -z "${VERSION}" ]]; then
+            echo "Could not parse Gradle version from distributionUrl: ${DIST_URL}" >&2
+            exit 1
+          fi
+
+          echo "dist_url=${DIST_URL}" >> "${GITHUB_OUTPUT}"
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+
+          echo "Using dist_url: ${DIST_URL}"
+          echo "Parsed version: ${VERSION}"
 
       - name: Download Gradle distribution
+        shell: bash
         run: |
-          curl -sSL "${{ steps.wrapper.outputs.dist_url }}" -o /tmp/gradle-distribution.zip
+          set -euo pipefail
+          curl -fLsS "${{ steps.wrapper.outputs.dist_url }}" -o /tmp/gradle-distribution.zip
           unzip -q /tmp/gradle-distribution.zip -d /tmp/gradle-dist
 
       - name: Recreate gradle-wrapper.jar
+        shell: bash
         run: |
-          WRAPPER_JAR=$(find /tmp/gradle-dist -name "gradle-wrapper-*.jar" | head -n 1)
-          if [ -z "$WRAPPER_JAR" ]; then
+          set -euo pipefail
+
+          WRAPPER_JAR="$(find /tmp/gradle-dist -type f -name "gradle-wrapper-*.jar" | head -n 1 || true)"
+          if [[ -z "${WRAPPER_JAR}" ]]; then
             echo "Wrapper JAR not found in downloaded distribution" >&2
+            echo "Debug: listing possible wrapper locations:" >&2
+            find /tmp/gradle-dist -maxdepth 6 -type f -iname "*wrapper*.jar" >&2 || true
             exit 1
           fi
+
           mkdir -p gradle/wrapper
-          cp "$WRAPPER_JAR" gradle/wrapper/gradle-wrapper.jar
+          cp -f "${WRAPPER_JAR}" gradle/wrapper/gradle-wrapper.jar
 
       - name: Show checksum
         run: sha256sum gradle/wrapper/gradle-wrapper.jar
